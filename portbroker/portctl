@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BROKER="http://localhost:9876"
+
+usage() {
+  cat <<'EOF'
+portctl — portbroker CLI
+
+Usage:
+  portctl status
+  portctl list
+  portctl get <project> [<worktree>]
+  portctl register <project> [--worktree <name>] [--ephemeral] <service> [<service>...]
+  portctl deregister <project> [<worktree>]
+  portctl cleanup
+EOF
+}
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+require_daemon() {
+  curl -sf "$BROKER/health" >/dev/null 2>&1 \
+    || die "portbroker is not running. Start it: python3 ~/projects/infrastructure/portbroker/server.py &"
+}
+
+cmd_status() {
+  if curl -sf "$BROKER/health" >/dev/null 2>&1; then
+    echo "portbroker is running on port 9876"
+  else
+    echo "portbroker is NOT running"
+    exit 1
+  fi
+}
+
+cmd_list() {
+  require_daemon
+  curl -s "$BROKER/assignments" | python3 - <<'PYEOF'
+import json, sys
+data = json.load(sys.stdin)
+entries = sorted(data['assignments'].items())
+if not entries:
+    print("No assignments.")
+    sys.exit(0)
+col1 = max(len(k) for k, _ in entries)
+print(f"{'PROJECT:WORKTREE':<{col1}}  {'TYPE':<10}  PORTS")
+print("-" * (col1 + 40))
+for key, e in entries:
+    t = "system" if key == "portbroker:system" else ("ephemeral" if e["ephemeral"] else "permanent")
+    ports = ", ".join(f"{s}={p}" for s, p in e["ports"].items())
+    print(f"{key:<{col1}}  {t:<10}  {ports}")
+PYEOF
+}
+
+cmd_get() {
+  require_daemon
+  local project="${1:?Usage: portctl get <project> [<worktree>]}"
+  local worktree="${2:-main}"
+  curl -s "$BROKER/assignments/$project/$worktree" | python3 - <<'PYEOF'
+import json, sys
+data = json.load(sys.stdin)
+if "error" in data:
+    print(f"Error: {data['error']}", file=sys.stderr)
+    sys.exit(1)
+print(f"{data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})")
+for s, p in data["ports"].items():
+    print(f"  {s}: {p}")
+PYEOF
+}
+
+cmd_register() {
+  require_daemon
+  local project="${1:?Usage: portctl register <project> [--worktree <name>] [--ephemeral] <service...>}"
+  shift
+  local worktree="main"
+  local ephemeral="false"
+  local services=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --worktree) worktree="$2"; shift 2 ;;
+      --ephemeral) ephemeral="true"; shift ;;
+      *) services+=("$1"); shift ;;
+    esac
+  done
+
+  [[ ${#services[@]} -gt 0 ]] || die "At least one service name is required"
+
+  local svc_json
+  svc_json=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" -- "${services[@]}")
+
+  curl -s -X POST "$BROKER/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\",\"ephemeral\":$ephemeral,\"services\":$svc_json}" \
+  | python3 - <<'PYEOF'
+import json, sys
+data = json.load(sys.stdin)
+if "error" in data:
+    print(f"Error: {data['error']}", file=sys.stderr)
+    sys.exit(1)
+print(f"Registered {data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})")
+for s, p in data["ports"].items():
+    print(f"  {s}: {p}")
+PYEOF
+}
+
+cmd_deregister() {
+  require_daemon
+  local project="${1:?Usage: portctl deregister <project> [<worktree>]}"
+  local worktree="${2:-main}"
+  curl -s -X DELETE "$BROKER/deregister" \
+    -H "Content-Type: application/json" \
+    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\"}" \
+  | python3 - <<'PYEOF'
+import json, sys
+data = json.load(sys.stdin)
+if "error" in data:
+    print(f"Error: {data['error']}", file=sys.stderr)
+    sys.exit(1)
+print(data.get("message", "Done"))
+PYEOF
+}
+
+cmd_cleanup() {
+  require_daemon
+  curl -s -X POST "$BROKER/cleanup" | python3 - <<'PYEOF'
+import json, sys
+data = json.load(sys.stdin)
+removed = data.get("removed", [])
+if removed:
+    print(f"Removed {len(removed)} ephemeral entr{'y' if len(removed)==1 else 'ies'}:")
+    for k in removed:
+        print(f"  {k}")
+else:
+    print("No ephemeral entries to remove.")
+PYEOF
+}
+
+case "${1:-}" in
+  status)     cmd_status ;;
+  list)       cmd_list ;;
+  get)        shift; cmd_get "$@" ;;
+  register)   shift; cmd_register "$@" ;;
+  deregister) shift; cmd_deregister "$@" ;;
+  cleanup)    cmd_cleanup ;;
+  -h|--help)  usage ;;
+  *)          usage; exit 1 ;;
+esac
