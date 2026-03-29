@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 DAEMON_HOST = '127.0.0.1'
 DAEMON_PORT = 9876
 REGISTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ports.json')
+OPENAPI_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml')
 FALLBACK_PORT = 9000
 
 SERVICE_DEFAULTS = {
@@ -288,9 +289,37 @@ def _build_ui_html():
 </html>'''
 
 
-def _make_handler(registry):
+def _build_docs_html():
+    return '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>portbroker API</title>
+  <style>
+    body { margin: 0; padding: 0; background: #1e1e1e; }
+  </style>
+</head>
+<body>
+  <div id="redoc-container"></div>
+  <script src="https://cdn.jsdelivr.net/npm/redoc/bundles/redoc.standalone.js"></script>
+  <script>
+    Redoc.init('/openapi.yaml', {
+      theme: {
+        colors: { primary: { main: '#569cd6' } },
+        typography: { fontFamily: 'monospace, monospace' },
+        sidebar: { backgroundColor: '#1e1e1e', textColor: '#d4d4d4' },
+        rightPanel: { backgroundColor: '#252525' }
+      }
+    }, document.getElementById('redoc-container'))
+  </script>
+</body>
+</html>'''
+
+
+def _make_handler(registry, openapi_path=OPENAPI_PATH):
     class PortBrokerHandler(BaseHTTPRequestHandler):
         _registry = registry
+        _openapi_path = openapi_path
 
         def log_message(self, fmt, *args):
             pass  # suppress per-request console noise
@@ -300,6 +329,10 @@ def _make_handler(registry):
                 self._serve_ui()
             elif self.path == '/health':
                 self._json({'status': 'ok', 'port': DAEMON_PORT})
+            elif self.path == '/docs':
+                self._serve_docs()
+            elif self.path == '/openapi.yaml':
+                self._serve_openapi()
             elif self.path == '/assignments':
                 self._json({'assignments': self._registry.get_all()})
             elif self.path.startswith('/assignments/'):
@@ -376,13 +409,40 @@ def _make_handler(registry):
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_docs(self):
+            html = _build_docs_html()
+            body = html.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_openapi(self):
+            if not os.path.exists(self._openapi_path):
+                body = b'openapi.yaml not found. Run: portctl gendocs'
+                self.send_response(404)
+                self.send_header('Content-Type', 'text/plain')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            with open(self._openapi_path, 'rb') as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/yaml')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
     return PortBrokerHandler
 
 
-def run_server(host=DAEMON_HOST, port=DAEMON_PORT, registry_path=REGISTRY_PATH, block=True):
+def run_server(host=DAEMON_HOST, port=DAEMON_PORT, registry_path=REGISTRY_PATH,
+               openapi_path=OPENAPI_PATH, block=True):
     registry = Registry(registry_path)
     registry.bootstrap()
-    server = HTTPServer((host, port), _make_handler(registry))
+    server = HTTPServer((host, port), _make_handler(registry, openapi_path))
     if block:
         print(f'portbroker listening on {host}:{port}')
         server.serve_forever()
