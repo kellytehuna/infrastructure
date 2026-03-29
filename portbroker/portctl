@@ -14,6 +14,7 @@ Usage:
   portctl register <project> [--worktree <name>] [--ephemeral] <service> [<service>...]
   portctl deregister <project> [<worktree>]
   portctl cleanup
+  portctl gendocs
 EOF
 }
 
@@ -127,6 +128,12 @@ print(data.get('message', 'Done'))
 "
 }
 
+cmd_gendocs() {
+  local dir
+  dir="$(cd "$(dirname "$0")" && pwd)"
+  python3 "$dir/gendocs.py"
+}
+
 cmd_cleanup() {
   require_daemon
   local result
@@ -151,6 +158,7 @@ case "${1:-}" in
   register)   shift; cmd_register "$@" ;;
   deregister) shift; cmd_deregister "$@" ;;
   cleanup)    cmd_cleanup ;;
+  gendocs)    cmd_gendocs ;;
   -h|--help)  usage ;;
   *)          usage; exit 1 ;;
 esac

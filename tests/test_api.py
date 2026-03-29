@@ -24,6 +24,17 @@ def _request(method, port, path, body=None):
         return e.code, json.loads(e.read())
 
 
+def _request_raw(method, port, path):
+    """Like _request but returns raw bytes and content-type (no JSON parsing)."""
+    url = f'http://127.0.0.1:{port}{path}'
+    req = urllib.request.Request(url, method=method)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.headers.get('Content-Type', ''), resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get('Content-Type', ''), e.read()
+
+
 class TestAPIHealth(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -201,6 +212,52 @@ class TestAPICleanup(unittest.TestCase):
         status, data = _request('POST', self.port, '/cleanup')
         self.assertEqual(status, 200)
         self.assertIn('wt:ephwt', data['removed'])
+
+
+class TestAPIDocs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.registry_path = os.path.join(cls.tmpdir, 'ports.json')
+        # Copy openapi.yaml into tmpdir so the server can find it
+        cls.openapi_path = os.path.join(cls.tmpdir, 'openapi.yaml')
+        src = os.path.join(os.path.dirname(__file__), '..', 'portbroker', 'openapi.yaml')
+        shutil.copy(src, cls.openapi_path)
+        cls.port = 19881
+        cls.server = run_server('127.0.0.1', cls.port, cls.registry_path,
+                                openapi_path=cls.openapi_path, block=False)
+        time.sleep(0.1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_docs_returns_200_html(self):
+        status, content_type, body = _request_raw('GET', self.port, '/docs')
+        self.assertEqual(status, 200)
+        self.assertIn('text/html', content_type)
+        self.assertIn(b'redoc', body.lower())
+
+    def test_openapi_yaml_returns_200_yaml(self):
+        status, content_type, body = _request_raw('GET', self.port, '/openapi.yaml')
+        self.assertEqual(status, 200)
+        self.assertIn('yaml', content_type)
+        self.assertIn(b'openapi:', body)
+
+    def test_openapi_yaml_missing_returns_404(self):
+        import tempfile as tf
+        tmpdir2 = tf.mkdtemp()
+        missing_path = os.path.join(tmpdir2, 'openapi.yaml')  # does not exist
+        server2 = run_server('127.0.0.1', 19882,
+                             os.path.join(tmpdir2, 'ports.json'),
+                             openapi_path=missing_path, block=False)
+        time.sleep(0.1)
+        try:
+            status, _, _ = _request_raw('GET', 19882, '/openapi.yaml')
+            self.assertEqual(status, 404)
+        finally:
+            server2.shutdown()
 
 
 if __name__ == '__main__':

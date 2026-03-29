@@ -1,0 +1,295 @@
+openapi: 3.0.3
+info:
+  title: portbroker
+  version: 1.0.0
+  description: >-
+    Local port assignment daemon for Docker Compose projects and worktrees.
+    Assigns unique host ports on request, tracks all assignments persistently,
+    and prevents port collisions across projects.
+servers:
+  - url: http://localhost:9876
+    description: Local portbroker daemon
+paths:
+  /health:
+    get:
+      summary: Daemon liveness check
+      description: |
+        Returns 200 OK when the daemon is running. Use this to confirm
+        portbroker is available before making registration requests.
+
+        ```bash
+        curl -s http://localhost:9876/health
+        ```
+      responses:
+        '200':
+          description: Daemon is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  port:
+                    type: integer
+                    example: 9876
+  /assignments:
+    get:
+      summary: List all assignments
+      description: |
+        Returns all current port assignments, keyed by "project:worktree".
+
+        ```bash
+        curl -s http://localhost:9876/assignments
+        ```
+      responses:
+        '200':
+          description: All assignments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignmentMap'
+  /assignments/{project}:
+    get:
+      summary: List assignments for a project
+      description: |
+        Returns all worktree assignments for the given project.
+
+        ```bash
+        curl -s http://localhost:9876/assignments/gymscheduler
+        ```
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Assignments for the project (may be empty object)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: '#/components/schemas/Assignment'
+  /assignments/{project}/{worktree}:
+    get:
+      summary: Get one assignment
+      description: |
+        Returns the assignment for a specific project:worktree combination.
+
+        ```bash
+        curl -s http://localhost:9876/assignments/gymscheduler/main
+        ```
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: worktree
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The assignment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /register:
+    post:
+      summary: Register a project/worktree
+      description: |
+        Assigns unique ports to the requested services and stores the
+        assignment. Returns the complete assignment including port numbers.
+
+        The `worktree` field defaults to `main`. The `ephemeral` flag
+        defaults to `false`. Worktree and test container registrations
+        should set `ephemeral: true` so they can be swept by `POST /cleanup`.
+
+        Returns 409 Conflict if the project:worktree is already registered.
+        Use `GET /assignments/{project}/{worktree}` to retrieve the existing
+        assignment instead of re-registering.
+
+        ```bash
+        curl -s -X POST http://localhost:9876/register \
+          -H 'Content-Type: application/json' \
+          -d '{"project": "gymscheduler", "services": ["nginx", "postgres"]}'
+        ```
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '400':
+          description: Missing required field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /deregister:
+    delete:
+      summary: Release a project/worktree
+      description: |
+        Removes the port assignment for a project:worktree combination.
+        The ports become available for reassignment.
+
+        The `portbroker:system` entry cannot be deregistered (returns 403).
+
+        ```bash
+        curl -s -X DELETE http://localhost:9876/deregister \
+          -H 'Content-Type: application/json' \
+          -d '{"project": "gymscheduler", "worktree": "feature-x"}'
+        ```
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeregisterRequest'
+      responses:
+        '200':
+          description: Deregistered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '400':
+          description: Missing required field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Cannot deregister protected entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /cleanup:
+    post:
+      summary: Remove all ephemeral entries
+      description: |
+        Deregisters all entries marked `ephemeral: true`. Use this after a
+        crash or failed teardown left stale worktree registrations.
+
+        ```bash
+        curl -s -X POST http://localhost:9876/cleanup
+        ```
+      responses:
+        '200':
+          description: Removed entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: array
+                    items:
+                      type: string
+                    description: Keys of removed entries (e.g. "myapp:feat-x")
+components:
+  schemas:
+    Assignment:
+      type: object
+      required: [project, worktree, ephemeral, registered_at, ports]
+      properties:
+        project:
+          type: string
+          example: gymscheduler
+        worktree:
+          type: string
+          example: main
+        ephemeral:
+          type: boolean
+          example: false
+        registered_at:
+          type: string
+          format: date-time
+        ports:
+          type: object
+          additionalProperties:
+            type: integer
+          example:
+            nginx: 8080
+            postgres: 5432
+    AssignmentMap:
+      type: object
+      properties:
+        assignments:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Assignment'
+    RegisterRequest:
+      type: object
+      required: [project, services]
+      properties:
+        project:
+          type: string
+          example: gymscheduler
+        worktree:
+          type: string
+          default: main
+          example: main
+        ephemeral:
+          type: boolean
+          default: false
+        services:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          example: [nginx, postgres]
+    DeregisterRequest:
+      type: object
+      required: [project]
+      properties:
+        project:
+          type: string
+          example: gymscheduler
+        worktree:
+          type: string
+          default: main
+          example: main
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: not_found
