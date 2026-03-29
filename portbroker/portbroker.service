@@ -1,0 +1,12 @@
+[Unit]
+Description=portbroker — local port assignment daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/projects/infrastructure/portbroker/server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
