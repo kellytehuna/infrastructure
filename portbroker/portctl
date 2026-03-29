@@ -35,37 +35,41 @@ cmd_status() {
 
 cmd_list() {
   require_daemon
-  curl -s "$BROKER/assignments" | python3 - <<'PYEOF'
+  local result
+  result=$(curl -s "$BROKER/assignments")
+  echo "$result" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 entries = sorted(data['assignments'].items())
 if not entries:
-    print("No assignments.")
+    print('No assignments.')
     sys.exit(0)
 col1 = max(len(k) for k, _ in entries)
-print(f"{'PROJECT:WORKTREE':<{col1}}  {'TYPE':<10}  PORTS")
-print("-" * (col1 + 40))
+print(f\"{'PROJECT:WORKTREE':<{col1}}  {'TYPE':<10}  PORTS\")
+print('-' * (col1 + 40))
 for key, e in entries:
-    t = "system" if key == "portbroker:system" else ("ephemeral" if e["ephemeral"] else "permanent")
-    ports = ", ".join(f"{s}={p}" for s, p in e["ports"].items())
-    print(f"{key:<{col1}}  {t:<10}  {ports}")
-PYEOF
+    t = 'system' if key == 'portbroker:system' else ('ephemeral' if e['ephemeral'] else 'permanent')
+    ports = ', '.join(f\"{s}={p}\" for s, p in e['ports'].items())
+    print(f\"{key:<{col1}}  {t:<10}  {ports}\")
+"
 }
 
 cmd_get() {
   require_daemon
   local project="${1:?Usage: portctl get <project> [<worktree>]}"
   local worktree="${2:-main}"
-  curl -s "$BROKER/assignments/$project/$worktree" | python3 - <<'PYEOF'
+  local result
+  result=$(curl -s "$BROKER/assignments/$project/$worktree")
+  echo "$result" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-if "error" in data:
-    print(f"Error: {data['error']}", file=sys.stderr)
+if 'error' in data:
+    print(f\"Error: {data['error']}\", file=sys.stderr)
     sys.exit(1)
-print(f"{data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})")
-for s, p in data["ports"].items():
-    print(f"  {s}: {p}")
-PYEOF
+print(f\"{data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})\")
+for s, p in data['ports'].items():
+    print(f\"  {s}: {p}\")
+"
 }
 
 cmd_register() {
@@ -87,53 +91,57 @@ cmd_register() {
   [[ ${#services[@]} -gt 0 ]] || die "At least one service name is required"
 
   local svc_json
-  svc_json=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" -- "${services[@]}")
+  svc_json=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${services[@]}")
 
-  curl -s -X POST "$BROKER/register" \
+  local result
+  result=$(curl -s -X POST "$BROKER/register" \
     -H "Content-Type: application/json" \
-    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\",\"ephemeral\":$ephemeral,\"services\":$svc_json}" \
-  | python3 - <<'PYEOF'
+    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\",\"ephemeral\":$ephemeral,\"services\":$svc_json}")
+  echo "$result" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-if "error" in data:
-    print(f"Error: {data['error']}", file=sys.stderr)
+if 'error' in data:
+    print(f\"Error: {data['error']}\", file=sys.stderr)
     sys.exit(1)
-print(f"Registered {data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})")
-for s, p in data["ports"].items():
-    print(f"  {s}: {p}")
-PYEOF
+print(f\"Registered {data['project']}:{data['worktree']}  ({'ephemeral' if data['ephemeral'] else 'permanent'})\")
+for s, p in data['ports'].items():
+    print(f\"  {s}: {p}\")
+"
 }
 
 cmd_deregister() {
   require_daemon
   local project="${1:?Usage: portctl deregister <project> [<worktree>]}"
   local worktree="${2:-main}"
-  curl -s -X DELETE "$BROKER/deregister" \
+  local result
+  result=$(curl -s -X DELETE "$BROKER/deregister" \
     -H "Content-Type: application/json" \
-    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\"}" \
-  | python3 - <<'PYEOF'
+    -d "{\"project\":\"$project\",\"worktree\":\"$worktree\"}")
+  echo "$result" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-if "error" in data:
-    print(f"Error: {data['error']}", file=sys.stderr)
+if 'error' in data:
+    print(f\"Error: {data['error']}\", file=sys.stderr)
     sys.exit(1)
-print(data.get("message", "Done"))
-PYEOF
+print(data.get('message', 'Done'))
+"
 }
 
 cmd_cleanup() {
   require_daemon
-  curl -s -X POST "$BROKER/cleanup" | python3 - <<'PYEOF'
+  local result
+  result=$(curl -s -X POST "$BROKER/cleanup")
+  echo "$result" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-removed = data.get("removed", [])
+removed = data.get('removed', [])
 if removed:
-    print(f"Removed {len(removed)} ephemeral entr{'y' if len(removed)==1 else 'ies'}:")
+    print(f\"Removed {len(removed)} ephemeral entr{'y' if len(removed)==1 else 'ies'}:\")
     for k in removed:
-        print(f"  {k}")
+        print(f'  ' + k)
 else:
-    print("No ephemeral entries to remove.")
-PYEOF
+    print('No ephemeral entries to remove.')
+"
 }
 
 case "${1:-}" in
