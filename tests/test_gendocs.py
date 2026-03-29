@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,9 @@ class TestGendocs(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.out = os.path.join(self.tmpdir, 'openapi.yaml')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _run(self):
         subprocess.run([sys.executable, GENDOCS, '--out', self.out], check=True)

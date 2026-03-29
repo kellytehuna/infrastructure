@@ -130,8 +130,8 @@ paths:
         assignment instead of re-registering.
 
         ```bash
-        curl -s -X POST http://localhost:9876/register \\\\
-          -H 'Content-Type: application/json' \\\\
+        curl -s -X POST http://localhost:9876/register \\
+          -H 'Content-Type: application/json' \\
           -d '{"project": "gymscheduler", "services": ["nginx", "postgres"]}'
         ```
       requestBody:
@@ -169,8 +169,8 @@ paths:
         The `portbroker:system` entry cannot be deregistered (returns 403).
 
         ```bash
-        curl -s -X DELETE http://localhost:9876/deregister \\\\
-          -H 'Content-Type: application/json' \\\\
+        curl -s -X DELETE http://localhost:9876/deregister \\
+          -H 'Content-Type: application/json' \\
           -d '{"project": "gymscheduler", "worktree": "feature-x"}'
         ```
       requestBody:
